@@ -17,13 +17,8 @@ bool Dhat__update(Dhat *self) {
     bool up = self->up.is_pressed(&self->up);
     bool down = self->down.is_pressed(&self->down);
     bool push = self->push.is_pressed(&self->push);
-    // Debounce.
-    if (left || right || up || down || push) {
-        if (time_us_64() <= self->timestamp + CFG_DHAT_DEBOUNCE_TIME*1000) {
-            return true;
-        }
-        self->timestamp = time_us_64();
-    }
+    // Debounce handled in function above
+
     // Cardinals.
     self->up_center.virtual_press = (up && !left && !right);
     self->mid_left.virtual_press = (left && !up && !down);

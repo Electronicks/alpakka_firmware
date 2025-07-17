@@ -13,6 +13,8 @@
 #include "common.h"
 
 bool Button__is_pressed(Button *self) {
+    bool is_pressed = false;
+
     if (self->pin == PIN_NONE) return false;
     // Virtual buttons.
     else if (self->pin == PIN_VIRTUAL) {
@@ -25,208 +27,48 @@ bool Button__is_pressed(Button *self) {
     }
     // Buttons connected directly to Pico.
     else if (is_between(self->pin, PIN_GROUP_BOARD, PIN_GROUP_BOARD_END)) {
-        return !gpio_get(self->pin);
+        is_pressed =  !gpio_get(self->pin);
     }
     // Buttons connected to 1st IO expander.
     else if (is_between(self->pin, PIN_GROUP_IO_0, PIN_GROUP_IO_0_END)) {
-        return bus_i2c_io_cache_read(0, self->pin - PIN_GROUP_IO_0);
+        is_pressed =  bus_i2c_io_cache_read(0, self->pin - PIN_GROUP_IO_0);
     }
     // Buttons connected to 2nd IO expander.
     else if (is_between(self->pin, PIN_GROUP_IO_1, PIN_GROUP_IO_1_END)) {
-        return bus_i2c_io_cache_read(1, self->pin - PIN_GROUP_IO_1);
+        is_pressed =  bus_i2c_io_cache_read(1, self->pin - PIN_GROUP_IO_1);
     }
-    return false;  // Prevent undefined behavior.
+
+    // debounce processing
+    if (self->press_timestamp == 0 && is_pressed)
+    {
+        // start of debounce process
+        self->press_timestamp = time_us_64();
+    }
+    else if (self->press_timestamp > 0 && time_us_64()-self->press_timestamp < CFG_PRESS_DEBOUNCE*1000)
+    {
+        // is_pressed doesn't matter: we're debouncing
+        is_pressed = true;
+    }
+    else if (self->press_timestamp > 0 && !is_pressed)
+    {
+        // We're out of the debounce window : clear timestamp
+        self->press_timestamp = 0;
+    }
+    return is_pressed;
 }
 
 void Button__report(Button *self) {
-    if (self->mode == NORMAL) self->handle_normal(self);
-    if ( (self->mode & HOLD) && !(self->mode & DOUBLE)) self->handle_hold(self);
-    if (!(self->mode & HOLD) &&  (self->mode & DOUBLE)) self->handle_double(self);
-    if ( (self->mode & HOLD) &&  (self->mode & DOUBLE)) self->handle_hold_double(self);
-    if (self->mode == STICKY) self->handle_sticky(self);
-}
-
-void Button__handle_normal(Button *self) {
-    uint64_t debounce = self->press_timestamp + (CFG_PRESS_DEBOUNCE * 1000);
-    if (time_us_64() < debounce) return;
-    bool pressed = self->is_pressed(self);
-    if(pressed && !self->state_primary) {
-        hid_press_multiple(self->actions);
-        self->state_primary = true;
-        self->press_timestamp = time_us_64();
-        return;
+    if (self->mode == STICKY)
+    {
+        self->handle_sticky(self);
     }
-    if((!pressed) && self->state_primary) {
-        hid_release_multiple(self->actions);
-        self->state_primary = false;
-        return;
-    }
-}
-
-void Button__handle_hold(Button *self) {
-    bool immediate = self->mode & IMMEDIATE;
-    uint64_t time = (self->mode & LONG) ? CFG_HOLD_LONG_TIME : CFG_HOLD_TIME;
-    bool pressed = self->is_pressed(self);
-    if(pressed && !self->state_primary && !self->state_secondary) {
-        // Initial press.
-        if (immediate) hid_press_multiple(self->actions);
-        self->state_primary = true;
-        self->press_timestamp = time_us_64();
-        return;
-    }
-    if(pressed && self->state_primary && !self->state_secondary) {
-        if (time_us_64() > self->press_timestamp + (time * 1000)) {
-            // Pressed and being held long enough.
-            hid_press_multiple(self->actions_secondary);
-            if (!immediate) self->state_primary = false;
-            self->state_secondary = true;
-        }
-    }
-    if(!pressed && self->state_primary) {
-        if (immediate) {
-            // Released, immediate actions were triggered.
-            hid_release_multiple(self->actions);
-        } else {
-            // Released, it was never condidered held.
-            hid_press_multiple(self->actions);
-            hid_release_multiple_later(self->actions, 100);
-        }
-        self->state_primary = false;
-        return;
-    }
-    if(!pressed && self->state_secondary) {
-        // Relased and it was condidered held.
-        hid_release_multiple(self->actions_secondary);
-        self->state_secondary = false;
-    }
-}
-
-void Button__handle_double(Button *self) {
-    bool immediate = self->mode & IMMEDIATE;
-    uint16_t time = CFG_DOUBLE_PRESS_TIME;
-    bool pressed = self->is_pressed(self);
-    if (pressed && !self->timestamps_updated) {
-        self->press_timestamp_prev = self->press_timestamp;
-        self->press_timestamp = time_us_64();
-        self->timestamps_updated = true;
-    }
-    if (!pressed) {
-        self->timestamps_updated = false;
-    }
-    if(pressed && !self->state_terciary) {
-        uint64_t elapsed = self->press_timestamp - self->press_timestamp_prev;
-        bool is_double_press = elapsed < (time * 1000);
-        if (is_double_press) {
-            // The press is considered a double press.
-            self->state_terciary = true;
-            hid_press_multiple(self->actions_terciary);
-        } else {
-            // It is a first press.
-            self->state_primary = true;
-            if (!self->emitted_primary) {
-                if (immediate) {
-                    // Trigger primary immediately.
-                    hid_press_multiple(self->actions);
-                    self->emitted_primary = true;
-                } else {
-                    uint64_t timeout = time_us_64() > self->press_timestamp + (time * 1000);
-                    if (timeout) {
-                        // It has been held so long that the next press cannot be a double press.
-                        hid_press_multiple(self->actions);
-                        self->emitted_primary = true;
-                    }
-                }
-            }
-        }
-        return;
-    }
-    if(!pressed && self->state_primary && !self->state_terciary) {
-        if (self->emitted_primary) {
-            // Released and primary actions were triggered.
-            hid_release_multiple(self->actions);
-            self->state_primary = false;
-            self->emitted_primary = false;
-        } else {
-            uint64_t timeout = time_us_64() > self->press_timestamp + (time * 1000);
-            if (timeout) {
-                // Released for so long that the next press cannot be a double press.
-                hid_press_multiple(self->actions);
-                hid_release_multiple_later(self->actions, 100);
-                self->state_primary = false;
-            }
-        }
-    }
-    if(!pressed && self->state_terciary) {
-        // Released and it was a double press,
-        hid_release_multiple(self->actions_terciary);
-        self->state_primary = false;
-        self->state_terciary = false;
-    }
-}
-
-void Button__handle_hold_double(Button *self) {
-    bool immediate = self->mode & IMMEDIATE;
-    uint64_t hold_time = (self->mode & LONG) ? CFG_HOLD_LONG_TIME : CFG_HOLD_TIME;
-    uint16_t double_time = CFG_DOUBLE_PRESS_TIME;
-    bool pressed = self->is_pressed(self);
-    if (pressed && !self->timestamps_updated) {
-        self->press_timestamp_prev = self->press_timestamp;
-        self->press_timestamp = time_us_64();
-        self->timestamps_updated = true;
-    }
-    if (!pressed) {
-        self->timestamps_updated = false;
-    }
-    if(pressed && !self->state_terciary) {
-        uint64_t elapsed = self->press_timestamp - self->press_timestamp_prev;
-        bool is_double_press = elapsed < (double_time * 1000);
-        if (is_double_press) {
-            // The press is considered a double press.
-            self->state_terciary = true;
-            hid_press_multiple(self->actions_terciary);
-        } else {
-            self->state_primary = true;
-            if (!self->state_secondary) {
-                if (immediate && !self->emitted_primary) {
-                    // Trigger primary immediately.
-                    hid_press_multiple(self->actions);
-                    self->emitted_primary = true;
-                }
-                uint64_t timeout = time_us_64() > self->press_timestamp + (hold_time * 1000);
-                if (timeout) {
-                    // It has been held so long that is considered held.
-                    hid_press_multiple(self->actions_secondary);
-                    self->state_secondary = true;
-                }
-            }
-        }
-        return;
-    }
-    if (!pressed && self->emitted_primary) {
-        // Released and primary actions (immediate) was triggered.
-        hid_release_multiple(self->actions);
-        self->emitted_primary = false;
-    }
-    if(!pressed && self->state_primary && !self->state_secondary && !self->state_terciary && !immediate) {
-        uint64_t timeout = time_us_64() > self->press_timestamp + (double_time * 1000);
-        if (timeout) {
-            // Released for so long that the next press cannot be a double press.
-            hid_press_multiple(self->actions);
-            hid_release_multiple_later(self->actions, 100);
-            self->state_primary = false;
-        }
-    }
-    if(!pressed && self->state_secondary) {
-        // Released and it was considered held.
-        hid_release_multiple(self->actions_secondary);
-        self->state_primary = false;
-        self->state_secondary = false;
-    }
-    if(!pressed && self->state_terciary) {
-        // Released and it was a double press.
-        hid_release_multiple(self->actions_terciary);
-        self->state_primary = false;
-        self->state_terciary = false;
+    else
+    {
+        // Process latest input
+        FsmEvent evt;
+        evt.is_pressed = Button__is_pressed(self);
+        evt.now = time_us_64();
+        fsm__handle_event(&self->fsm, &evt);
     }
 }
 
@@ -246,9 +88,16 @@ void Button__handle_sticky(Button *self) {
 }
 
 void Button__reset(Button *self) {
-    self->state_primary = false;
-    self->state_secondary = false;
-    self->state_terciary = false;
+    // If state is not NoPress, Send release events until it is.
+    for (int i = 0  ; i < 3 && self->fsm.current_state == STATE_NoPress ; ++i)
+    {
+        if (i > 0) sleep_ms(CFG_PULSE_TIME);
+        FsmEvent evt;
+        evt.is_pressed = false; // Force sw release of the button,
+        evt.now = time_us_64();
+        fsm__handle_event(&self->fsm, &evt);
+    }
+
 }
 
 // Init.
@@ -267,25 +116,48 @@ Button Button_ (
     Button button;
     memcpy(button.actions, actions, 4);
     memcpy(button.actions_secondary, actions_secondary, 4);
-    memcpy(button.actions_terciary, actions_terciary, 4);
     button.is_pressed = Button__is_pressed;
     button.report = Button__report;
     button.reset = Button__reset;
-    button.handle_normal = Button__handle_normal;
-    button.handle_hold = Button__handle_hold;
-    button.handle_double = Button__handle_double;
-    button.handle_hold_double = Button__handle_hold_double;
     button.handle_sticky = Button__handle_sticky;
     button.pin = pin;
     button.mode = mode;
     button.state_primary = false;
-    button.state_secondary = false;
-    button.state_terciary = false;
-    button.emitted_primary = false;
     button.virtual_press = false;
     button.press_timestamp = 0;
-    button.press_timestamp_prev = 0;
-    button.timestamps_updated = false;
+    button.fsm = make_fsm();
+    button.fsm.long_hold = mode&LONG != 0;
+
+    // Translation layer from old to new
+    bool immediate = mode&IMMEDIATE != 0;
+    if (mode == NORMAL)
+    {
+        for(int i = 0 ; i < 4 ; ++i)
+        {
+            addMapping(&button.fsm.press_actions, actions[i], MOD_START, MOD_PRESS);
+        }
+    }
+    else if(mode & HOLD != 0)
+    {
+        for(int i = 0 ; i < 4 ; ++i)
+        {
+            addMapping(&button.fsm.press_actions, actions[i], MOD_START, immediate ? MOD_PRESS : MOD_TAP);
+            addMapping(&button.fsm.press_actions, actions_secondary[i], MOD_START, MOD_HOLD);
+            if (mode&DOUBLE != 0)
+            {
+                addMapping(&button.fsm.double_press_actions, actions_terciary[i], MOD_START, MOD_PRESS);
+            }
+        }
+    }
+    else if(mode & DOUBLE != 0 /*and not HOLD*/)
+    {
+        for(int i = 0 ; i < 4 ; ++i)
+        {
+            addMapping(&button.fsm.press_actions, actions[i], MOD_START, immediate ? MOD_PRESS : MOD_TAP);
+            addMapping(&button.fsm.double_press_actions, actions_secondary[i], MOD_START, MOD_PRESS);
+        }
+    }
+    // STICKY still has old handling
     return button;
 }
 

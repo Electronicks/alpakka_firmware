@@ -55,9 +55,11 @@
 
 #define CFG_PRESS_DEBOUNCE 50  // Milliseconds.
 #define CFG_HOLD_TIME 200  // Milliseconds.
+#define CFG_TURBO_TIME 80  // Milliseconds.
 #define CFG_HOLD_LONG_TIME 2000  // Milliseconds.
 #define CFG_DOUBLE_PRESS_TIME 300  // Milliseconds.
 #define CFG_HOME_SLEEP_TIME 5000  // Milliseconds.
+#define CFG_PULSE_TIME 100  // Milliseconds.
 
 #define CFG_DHAT_DEBOUNCE_TIME 100  // Milliseconds.
 

@@ -84,6 +84,7 @@ target_sources(${PROJECT} PUBLIC
     src/ctrl.c
     src/dhat.c
     src/esp.c
+    src/fsm.c
     src/glyph.c
     src/gyro.c
     src/hid.c
@@ -91,6 +92,7 @@ target_sources(${PROJECT} PUBLIC
     src/led.c
     src/logging.c
     src/loop.c
+    src/mapping.c
     src/nvm.c
     src/power.c
     src/profile.c
