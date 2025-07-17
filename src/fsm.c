@@ -1,245 +1,263 @@
 #include "fsm.h"
 #include "config.h"
 
-typedef enum _HandlerIndex {
+// Identifier for State Handler functions
+typedef enum _Handler {
     DO_ENTER = 0,
-    DO_PRESS = 1,
-    DO_RELEASE = 2,
-    DO_EXIT = 3,
-    HandlerIndex_SIZE = 4,
-} HandlerIndex;
+    DO_PRESS,
+    DO_RELEASE,
+    DO_EXIT,
+    // DO_SYNC
+    Handler_SIZE,
+} Handler;
 
+// ***********************
+// INTERNAL STATE MACHINE
+// ***********************
 
-
-
-typedef MappingState (*ActiveMappingHandler)(Fsm *self, FsmEvent *event, Mapping *activeMapping);
-
-typedef ButtonState (*StateHandler)(Fsm *self, FsmEvent *event);
-
-
-MappingState Fsm__call_mapping_state_handler(Fsm *self, FsmEvent *event, HandlerIndex handler, Mapping *activeMapping);
-
-void fsm__handle_mapping_event(Fsm *self, FsmEvent *event, Mapping *activeMapping)
-{
-    // Call the handler for the current state when the button is pressed
-    ButtonState next_state = Fsm__call_mapping_state_handler(self, event,
-        event->is_pressed? DO_PRESS : DO_RELEASE, activeMapping);
- 
-    if (next_state != self->current_state) {
-        // state change requested by the handler!
-        // Call the exit handler of the current state
-        Fsm__call_mapping_state_handler(self, event, DO_EXIT, activeMapping);
-        self->current_state = next_state;
-        // Call the exit handler of the current state
-        Fsm__call_mapping_state_handler(self, event, DO_ENTER, activeMapping);
-    }
-}
-
-// No handling Callback
-
-MappingState No_Mapping_Handling(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    return self->mapping_state;
-}
-
-ButtonState No_Button_Handling(Fsm *self, FsmEvent *event) {
-    return self->current_state;
-}
+// Signature of a ActivationState Callback handler
+typedef ActivationState (*ActiveMappingHandler)(Fsm *self, FsmEvent *event, Mapping *active_mapping);
 
 // REST
 
-MappingState REST__OnPress(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    return STATE_START;
+ActivationState REST__OnPress(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
+    return ACT_START;
 }
 
-MappingState REST__OnRelease(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
+ActivationState REST__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
     // Used to trigger delayed taps
-    return STATE_TAP;
+    return ACT_TAP;
 }
+
 // START
 
-MappingState START__OnEntry(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
+ActivationState START__OnEntry(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
     // update chord state
-    Fsm__call_mapping_state_handler(self, event, OnPress, &self->press_actions);
+    processEvent(active_mapping, OnPress);
     self->timestamp = event->now; // Mark start press time
-    return self->mapping_state;
+    return self->activation_state;
 }
 
-MappingState START__OnPress(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
+ActivationState START__OnPress(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
     uint64_t hold_time = self->long_hold? CFG_HOLD_LONG_TIME : CFG_HOLD_TIME;
     if (event->now - self->timestamp > hold_time)
     {
-        return STATE_HOLD;
+        // Button was held for long enough
+        return ACT_HOLD;
     }
-    return self->current_state;
+    return self->activation_state;
 }
 
-MappingState START__OnRelease(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    Fsm__call_mapping_state_handler(self, event, OnRelease, &self->press_actions);
-    // Delay Tap actions when a double press is 
-    return self->double_press_actions.count == 0 ? STATE_TAP : STATE_REST;
+ActivationState START__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
+    processEvent(active_mapping, OnRelease);
+    // Delay Tap actions when a double press is
+    return self->double_press_actions.count == 0 ? ACT_TAP : ACT_REST;
 }
 
 // TAP
 
-MappingState TAP__OnEntry(Fsm *self, FsmEvent *event, Mapping *activeMapping)
+ActivationState TAP__OnEntry(Fsm *self, FsmEvent *event, Mapping *active_mapping)
 {
-    Fsm__call_mapping_state_handler(self, event, OnTap, &self->press_actions);
+    processEvent(active_mapping, OnTap);
     self->timestamp = event->now; // Mark start press time
-    return self->mapping_state;
+    return self->activation_state;
 }
 
-MappingState TAP__OnPress(Fsm *self, FsmEvent *event, Mapping *activeMapping)
+ActivationState TAP__OnPress(Fsm *self, FsmEvent *event, Mapping *active_mapping)
 {
     // Try to catch up! new press has started already
-    return STATE_REST;
+    return ACT_REST;
 }
 
-MappingState TAP__OnRelease(Fsm *self, FsmEvent *event, Mapping *activeMapping)
+ActivationState TAP__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapping)
 {
+    // Stay in this state until pulses have finished processing
     if (event->now - self->timestamp > CFG_PULSE_TIME)
     {
-        return STATE_REST;
+        return ACT_REST;
     }
     return self->current_state;
 }
 
 // HOLD
 
-MappingState HOLD__OnEntry(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    Fsm__call_mapping_state_handler(self, event, OnHold, &self->press_actions);
-    Fsm__call_mapping_state_handler(self, event, OnTurbo, &self->press_actions);
-    self->timestamp = time_us_64(); // Start counting turbo press
+ActivationState HOLD__OnEntry(Fsm *self, FsmEvent *event, Mapping *active_mapping)
+{
+    processEvent(active_mapping, OnHold);
+    processEvent(active_mapping, OnTurbo);
+    self->timestamp = event->now; // Start counting turbo press
+    return self->activation_state;
 }
 
 
-MappingState HOLD__OnPress(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    uint64_t now = time_us_64();
-    if (now - self->timestamp > CFG_TURBO_TIME) {
-        Fsm__call_mapping_state_handler(self, event, OnTurbo, &self->press_actions);
-        self->timestamp = now;
+ActivationState HOLD__OnPress(Fsm *self, FsmEvent *event, Mapping *active_mapping)
+{
+    if (event->now - self->timestamp > CFG_TURBO_TIME) {
+        processEvent(active_mapping, OnTurbo);
+        self->timestamp = event->now;
     }
     return self->current_state;
 }
 
-MappingState HOLD__OnRelease(Fsm *self, FsmEvent *event, Mapping *activeMapping) {
-    Fsm__call_mapping_state_handler(self, event, OnHoldRelease, &self->press_actions);
-    Fsm__call_mapping_state_handler(self, event, OnRelease, &self->press_actions);
-    return STATE_REST;
+ActivationState HOLD__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapping)
+{
+    processEvent(active_mapping, OnHoldRelease);
+    processEvent(active_mapping, OnRelease);
+    return ACT_REST;
 }
+
+// No handling Callback
+ActivationState Do_Nothing_ACT(Fsm *self, FsmEvent *event, Mapping *active_mapping)
+{
+    return self->activation_state;
+}
+
+ActivationState Fsm__call_activation_state_handler(Fsm *self, FsmEvent *event, Mapping *active_mapping, Handler handler)
+{
+    // Handler map for each event for each state of the internal state machine
+    static ActiveMappingHandler active_state_map[ActivationState_SIZE][Handler_SIZE] = {
+    //          OnEntry         OnPress         OnRelease         OnExit
+    /*REST*/   {Do_Nothing_ACT, REST__OnPress,  REST__OnRelease,  Do_Nothing_ACT},
+    /*START*/  {START__OnEntry, START__OnPress, START__OnRelease, Do_Nothing_ACT},
+    /*TAP*/    {TAP__OnEntry,   TAP__OnPress,   TAP__OnRelease,   Do_Nothing_ACT},
+    /*HOLD*/   {HOLD__OnEntry,  HOLD__OnPress,  HOLD__OnRelease,  Do_Nothing_ACT},
+    };
+
+    // beautifier function
+    return active_state_map[self->activation_state][handler](self, event, active_mapping);
+}
+
+
+void fsm__handle_mapping_event(Fsm *self, FsmEvent *event, Mapping *active_mapping)
+{
+    // Call the handler for the current state when the button is pressed
+    ButtonState next_state = Fsm__call_activation_state_handler(self, event,
+        active_mapping, event->is_pressed? DO_PRESS : DO_RELEASE);
+ 
+    if (next_state != self->current_state) {
+        // state change requested by the handler!
+        // Call the exit handler of the current state
+        Fsm__call_activation_state_handler(self, event, active_mapping, DO_EXIT);
+        self->current_state = next_state;
+        // Call the exit handler of the current state
+        Fsm__call_activation_state_handler(self, event, active_mapping, DO_ENTER);
+    }
+}
+
+
+// ***********************
+// EXTERNAL STATE MACHINE
+// ***********************
+
+// Signature of a ButtonState Callback handler
+typedef ButtonState (*StateHandler)(Fsm *self, FsmEvent *event);
 
 // NoPress
 
-ButtonState NoPress__OnEntry(Fsm *self, FsmEvent *event)
+ButtonState NO_PRESS__OnEntry(Fsm *self, FsmEvent *event)
 {
     // pop chord stack
+    return self->current_state;
 }
 
-ButtonState NoPress__OnPress(Fsm *self, FsmEvent *event)
+ButtonState NO_PRESS__OnPress(Fsm *self, FsmEvent *event)
 {
     // check for sim mapping: WaitSim
     if (self->double_press_actions.count > 0)
     {
-        return STATE_DblPressStart;
+        return BTN_DBL_PRESS_START;
     }
     // check for diag mapping: DiagPressMaster/Slave
-    return STATE_BtnPress;
+    return BTN_PRESS;
 }
 
-ButtonState NoPress_OnExit(Fsm *self, FsmEvent *event)
+ButtonState NO_PRESS__OnExit(Fsm *self, FsmEvent *event)
 {
     // push chord stack
+    return self->current_state;
 }
 
-ButtonState BtnPress__OnEvent(Fsm *self, FsmEvent *event)
+ButtonState PRESS__OnEvent(Fsm *self, FsmEvent *event)
 {
     fsm__handle_mapping_event(self, event, &self->press_actions);
-    if (self->mapping_state == STATE_REST)
+    if (self->activation_state == ACT_REST)
     {
-        return STATE_NoPress;
+        return BTN_NO_PRESS;
     }
     return self->current_state;
 }
 
-ButtonState DblPressStart__OnEvent(Fsm *self, FsmEvent *event)
+ButtonState DBL_PRESS_START_ON_EVENT(Fsm *self, FsmEvent *event)
 {
     // Process any OnPress actions
     fsm__handle_mapping_event(self, event, &self->press_actions);
-    if (self->mapping_state == STATE_HOLD)
+    if (self->activation_state == ACT_HOLD)
     {
         // If the first tap was so long that it triggers the long press,
         // Abandon double press possibility
-        return STATE_BtnPress;
+        return BTN_PRESS;
     }
-    if (self->mapping_state == STATE_REST)
+    if (self->activation_state == ACT_REST)
     {
-        return event->now - self->timestamp < CFG_DOUBLE_PRESS_TIME ? STATE_DblPressNoPress : STATE_NoPress;
+        return event->now - self->timestamp < CFG_DOUBLE_PRESS_TIME ? BTN_DBL_PRESS_NO_PRESS : BTN_NO_PRESS;
     }
     return self->current_state;
 }
 
 
-ButtonState DblPressNoPress__OnPress(Fsm *self, FsmEvent *event)
+ButtonState DBL_PRESS_NO_PRESS__OnPress(Fsm *self, FsmEvent *event)
 {
-    return STATE_DblPressPress;
+    return BTN_DBL_PRESS_PRESS;
 }
 
-ButtonState DblPressNoPress__OnRelease(Fsm *self, FsmEvent *event)
+ButtonState DBL_PRESS_NO_PRESS__OnRelease(Fsm *self, FsmEvent *event)
 {
     if (event->now - self->timestamp > CFG_DOUBLE_PRESS_TIME)
     {
         // Process any Tap actions now that the double press window has passed
         fsm__handle_mapping_event(self, event, &self->press_actions);
-        if (self->mapping_state == STATE_REST)
+        if (self->activation_state == ACT_REST)
         {
-            return STATE_NoPress;
+            return BTN_NO_PRESS;
         }
     }
     return self->current_state;
 }
 
 
-ButtonState DblPressPress__OnEvent(Fsm *self, FsmEvent *event)
+ButtonState DBL_PRESS_PRESS__OnEvent(Fsm *self, FsmEvent *event)
 {
     // Process any double press mappings actions
     fsm__handle_mapping_event(self, event, &self->double_press_actions);
-    if (self->mapping_state == STATE_REST)
+    if (self->activation_state == ACT_REST)
     {
-        return STATE_NoPress;
+        return BTN_NO_PRESS;
     }
     return self->current_state;
 }
 
-ButtonState Fsm__call_button_state_handler(Fsm *self, FsmEvent *event, HandlerIndex handler)
+// No handling Callback
+ButtonState Do_Nothing_BTN(Fsm *self, FsmEvent *event) {
+    return self->current_state;
+}
+
+ButtonState Fsm__call_button_state_handler(Fsm *self, FsmEvent *event, Handler handler)
 {
     // Handler map for each event for each state of the external state machine
-    static StateHandler Button_state_map[ButtonState_SIZE][HandlerIndex_SIZE] = {
-    //                   OnEntry             OnPress                   OnRelease                   OnExit
-    /*NoPress*/         {NoPress__OnEntry,   NoPress__OnPress,         No_Button_Handling,         NoPress_OnExit  },
-    /*BtnPress*/        {No_Button_Handling, BtnPress__OnEvent,        BtnPress__OnEvent,          No_Button_Handling},
-    /*DblPressStart*/   {No_Button_Handling, DblPressStart__OnEvent,   DblPressStart__OnEvent,     No_Button_Handling},
-    /*DblPressNoPress*/ {No_Button_Handling, DblPressNoPress__OnPress, DblPressNoPress__OnRelease, No_Button_Handling},
-    /*DblPressPress*/   {No_Button_Handling, DblPressPress__OnEvent,   DblPressPress__OnEvent,     No_Button_Handling},
+    static StateHandler Button_state_map[ButtonState_SIZE][Handler_SIZE] = {
+    //                   OnEntry            OnPress                      OnRelease                      OnExit
+    /*NoPress*/         {NO_PRESS__OnEntry, NO_PRESS__OnPress,           Do_Nothing_BTN,                NO_PRESS__OnExit},
+    /*BtnPress*/        {Do_Nothing_BTN,    PRESS__OnEvent,              PRESS__OnEvent,                Do_Nothing_BTN},
+    /*DblPressStart*/   {Do_Nothing_BTN,    DBL_PRESS_START_ON_EVENT,    DBL_PRESS_START_ON_EVENT,      Do_Nothing_BTN},
+    /*DblPressNoPress*/ {Do_Nothing_BTN,    DBL_PRESS_NO_PRESS__OnPress, DBL_PRESS_NO_PRESS__OnRelease, Do_Nothing_BTN},
+    /*DblPressPress*/   {Do_Nothing_BTN,    DBL_PRESS_PRESS__OnEvent,    DBL_PRESS_PRESS__OnEvent,      Do_Nothing_BTN},
     // ...
     };
 
-    // beautifier function
+    // Call correct handler for current state and handler
     return Button_state_map[self->current_state][handler](self, event);
 }
 
-MappingState Fsm__call_mapping_state_handler(Fsm *self, FsmEvent *event, HandlerIndex handler, Mapping *activeMapping)
-{
-    // Handler map for each event for each state of the internal state machine
-    static ActiveMappingHandler active_state_map[MappingState_SIZE][HandlerIndex_SIZE] = {
-    //          OnEntry         OnPress         OnRelease         OnExit
-    /*REST*/   {No_Mapping_Handling,    REST__OnPress,  REST__OnRelease,      No_Mapping_Handling  },
-    /*START*/  {START__OnEntry, START__OnPress, START__OnRelease, No_Mapping_Handling},
-    /*TAP*/    {TAP__OnEntry, TAP__OnPress, TAP__OnRelease, No_Mapping_Handling},
-    /*HOLD*/   {HOLD__OnEntry,  HOLD__OnPress,  HOLD__OnRelease,  No_Mapping_Handling },
-    };
-
-    // beautifier function
-    return active_state_map[self->mapping_state][handler](self, event, activeMapping);
-}
 
 void fsm__handle_event(Fsm *self, FsmEvent *event)
 {
@@ -257,23 +275,14 @@ void fsm__handle_event(Fsm *self, FsmEvent *event)
     }
 }
 
-
-void Fsm__raiseEvent(Fsm *self, Mapping *activeMapping, ButtonEvent event) {
-    assert(self && activeMapping && event != NoEvent);
-    for (int i = 0 ; i < MAX_ACTIONS_PER_EVENT ; ++i)
-    {
-        EventAction_Callback cb = activeMapping->_eventMapping[event][i];
-        if (cb.func != 0) {
-            // debug log
-            cb.func(cb.param); // Called the mapped action
-        }
-    }
-}
-
 Fsm make_fsm()
 {
     Fsm fsm;
-    fsm.current_state = STATE_NoPress;
-    fsm.mapping_state = STATE_REST;
-    init_mapping(&fsm.press_actions);
+    fsm.current_state = BTN_NO_PRESS;
+    fsm.activation_state = ACT_REST;
+    fsm.press_actions = make_mapping();
+    fsm.double_press_actions = make_mapping();
+    fsm.timestamp = 0;
+    fsm.long_hold = false;
+    return fsm;
 }

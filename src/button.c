@@ -88,16 +88,9 @@ void Button__handle_sticky(Button *self) {
 }
 
 void Button__reset(Button *self) {
-    // If state is not NoPress, Send release events until it is.
-    for (int i = 0  ; i < 3 && self->fsm.current_state == STATE_NoPress ; ++i)
-    {
-        if (i > 0) sleep_ms(CFG_PULSE_TIME);
-        FsmEvent evt;
-        evt.is_pressed = false; // Force sw release of the button,
-        evt.now = time_us_64();
-        fsm__handle_event(&self->fsm, &evt);
-    }
-
+    self->fsm.current_state = BTN_NO_PRESS;
+    self->fsm.activation_state = ACT_REST;
+    self->press_timestamp = 0;
 }
 
 // Init.
@@ -126,10 +119,12 @@ Button Button_ (
     button.virtual_press = false;
     button.press_timestamp = 0;
     button.fsm = make_fsm();
-    button.fsm.long_hold = mode&LONG != 0;
+    button.fsm.long_hold = (mode & LONG) != 0;
 
     // Translation layer from old to new
-    bool immediate = mode&IMMEDIATE != 0;
+    bool immediate = (mode & IMMEDIATE) != 0;
+    bool hold = (mode & HOLD) != 0;
+    bool dbl = (mode & DOUBLE) != 0;
     if (mode == NORMAL)
     {
         for(int i = 0 ; i < 4 ; ++i)
@@ -137,19 +132,19 @@ Button Button_ (
             addMapping(&button.fsm.press_actions, actions[i], MOD_START, MOD_PRESS);
         }
     }
-    else if(mode & HOLD != 0)
+    else if(hold)
     {
         for(int i = 0 ; i < 4 ; ++i)
         {
             addMapping(&button.fsm.press_actions, actions[i], MOD_START, immediate ? MOD_PRESS : MOD_TAP);
             addMapping(&button.fsm.press_actions, actions_secondary[i], MOD_START, MOD_HOLD);
-            if (mode&DOUBLE != 0)
+            if (dbl)
             {
                 addMapping(&button.fsm.double_press_actions, actions_terciary[i], MOD_START, MOD_PRESS);
             }
         }
     }
-    else if(mode & DOUBLE != 0 /*and not HOLD*/)
+    else if(dbl /*&& !hold is logically implicit*/)
     {
         for(int i = 0 ; i < 4 ; ++i)
         {

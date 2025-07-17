@@ -9,11 +9,6 @@
 #include "mapping.h"
 #include "fsm.h"
 
-// old interface
-#define ACTIONS_LEN 4
-
-typedef uint8_t Actions[ACTIONS_LEN];
-
 typedef enum _ButtonMode {
     NORMAL = 1,
     HOLD = 2,
