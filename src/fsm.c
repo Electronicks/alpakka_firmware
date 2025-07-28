@@ -33,6 +33,7 @@ ActivationState REST__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapp
 
 ActivationState START__OnEntry(Fsm *self, FsmEvent *event, Mapping *active_mapping) {
     // update chord state
+    info("How many mappings do I have? %d\n", active_mapping->count);
     processEvent(active_mapping, OnPress);
     self->timestamp = event->now; // Mark start press time
     return self->activation_state;
@@ -76,7 +77,7 @@ ActivationState TAP__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mappi
     {
         return ACT_REST;
     }
-    return self->current_state;
+    return self->activation_state;
 }
 
 // HOLD
@@ -96,7 +97,7 @@ ActivationState HOLD__OnPress(Fsm *self, FsmEvent *event, Mapping *active_mappin
         processEvent(active_mapping, OnTurbo);
         self->timestamp = event->now;
     }
-    return self->current_state;
+    return self->activation_state;
 }
 
 ActivationState HOLD__OnRelease(Fsm *self, FsmEvent *event, Mapping *active_mapping)
@@ -114,6 +115,7 @@ ActivationState Do_Nothing_ACT(Fsm *self, FsmEvent *event, Mapping *active_mappi
 
 ActivationState Fsm__call_activation_state_handler(Fsm *self, FsmEvent *event, Mapping *active_mapping, Handler handler)
 {
+    
     // Handler map for each event for each state of the internal state machine
     static ActiveMappingHandler active_state_map[ActivationState_SIZE][Handler_SIZE] = {
     //          OnEntry         OnPress         OnRelease         OnExit
@@ -122,7 +124,7 @@ ActivationState Fsm__call_activation_state_handler(Fsm *self, FsmEvent *event, M
     /*TAP*/    {TAP__OnEntry,   TAP__OnPress,   TAP__OnRelease,   Do_Nothing_ACT},
     /*HOLD*/   {HOLD__OnEntry,  HOLD__OnPress,  HOLD__OnRelease,  Do_Nothing_ACT},
     };
-
+    //info("Calling handler %d for state %d\n", handler, self->activation_state);
     // beautifier function
     return active_state_map[self->activation_state][handler](self, event, active_mapping);
 }
@@ -131,14 +133,15 @@ ActivationState Fsm__call_activation_state_handler(Fsm *self, FsmEvent *event, M
 void fsm__handle_mapping_event(Fsm *self, FsmEvent *event, Mapping *active_mapping)
 {
     // Call the handler for the current state when the button is pressed
-    ButtonState next_state = Fsm__call_activation_state_handler(self, event,
+    ActivationState next_state = Fsm__call_activation_state_handler(self, event,
         active_mapping, event->is_pressed? DO_PRESS : DO_RELEASE);
  
-    if (next_state != self->current_state) {
+    if (next_state != self->activation_state) {
+        info("State change from %d to %d\n", self->activation_state, next_state);
         // state change requested by the handler!
         // Call the exit handler of the current state
         Fsm__call_activation_state_handler(self, event, active_mapping, DO_EXIT);
-        self->current_state = next_state;
+        self->activation_state = next_state;
         // Call the exit handler of the current state
         Fsm__call_activation_state_handler(self, event, active_mapping, DO_ENTER);
     }
@@ -245,14 +248,19 @@ ButtonState Fsm__call_button_state_handler(Fsm *self, FsmEvent *event, Handler h
 {
     // Handler map for each event for each state of the external state machine
     static StateHandler Button_state_map[ButtonState_SIZE][Handler_SIZE] = {
-    //                   OnEntry            OnPress                      OnRelease                      OnExit
-    /*NoPress*/         {NO_PRESS__OnEntry, NO_PRESS__OnPress,           Do_Nothing_BTN,                NO_PRESS__OnExit},
-    /*BtnPress*/        {Do_Nothing_BTN,    PRESS__OnEvent,              PRESS__OnEvent,                Do_Nothing_BTN},
-    /*DblPressStart*/   {Do_Nothing_BTN,    DBL_PRESS_START_ON_EVENT,    DBL_PRESS_START_ON_EVENT,      Do_Nothing_BTN},
-    /*DblPressNoPress*/ {Do_Nothing_BTN,    DBL_PRESS_NO_PRESS__OnPress, DBL_PRESS_NO_PRESS__OnRelease, Do_Nothing_BTN},
-    /*DblPressPress*/   {Do_Nothing_BTN,    DBL_PRESS_PRESS__OnEvent,    DBL_PRESS_PRESS__OnEvent,      Do_Nothing_BTN},
+    //                   DO_ENTER            DO_PRESS                      DO_RELEASE                      DO_EXIT
+    /*BTN_NO_PRESS*/         {NO_PRESS__OnEntry, NO_PRESS__OnPress,           Do_Nothing_BTN,                NO_PRESS__OnExit},
+    /*BTN_PRESS*/        {Do_Nothing_BTN,    PRESS__OnEvent,              PRESS__OnEvent,                Do_Nothing_BTN},
+    /*BTN_DBL_PRESS_START*/   {Do_Nothing_BTN,    DBL_PRESS_START_ON_EVENT,    DBL_PRESS_START_ON_EVENT,      Do_Nothing_BTN},
+    /*BTN_DBL_PRESS_NO_PRESS*/ {Do_Nothing_BTN,    DBL_PRESS_NO_PRESS__OnPress, DBL_PRESS_NO_PRESS__OnRelease, Do_Nothing_BTN},
+    /*BTN_DBL_PRESS_PRESS*/   {Do_Nothing_BTN,    DBL_PRESS_PRESS__OnEvent,    DBL_PRESS_PRESS__OnEvent,      Do_Nothing_BTN},
     // ...
     };
+
+    // if (self->current_state != BTN_NO_PRESS || handler != DO_RELEASE)
+    // {
+    //     info("Calling handler %d for state %d\n", handler, self->current_state);
+    // }
 
     // Call correct handler for current state and handler
     return Button_state_map[self->current_state][handler](self, event);
@@ -266,6 +274,7 @@ void fsm__handle_event(Fsm *self, FsmEvent *event)
         event->is_pressed? DO_PRESS : DO_RELEASE);
  
     if (next_state != self->current_state) {
+        info("State change from %d to %d\n", self->current_state, next_state);
         // state change requested by the handler!
         // Call the exit handler of the current state
         Fsm__call_button_state_handler(self, event, DO_EXIT);

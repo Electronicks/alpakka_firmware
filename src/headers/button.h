@@ -32,8 +32,6 @@ struct Button_struct {
     bool state_primary;
     bool virtual_press;
     uint64_t press_timestamp;
-    uint64_t press_timestamp_prev;
-    bool timestamps_updated;
     Fsm fsm;
 };
 

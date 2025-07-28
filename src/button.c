@@ -107,14 +107,14 @@ Button Button_ (
         gpio_pull_up(pin);
     }
     Button button;
-    memcpy(button.actions, actions, 4);
-    memcpy(button.actions_secondary, actions_secondary, 4);
     button.is_pressed = Button__is_pressed;
     button.report = Button__report;
     button.reset = Button__reset;
     button.handle_sticky = Button__handle_sticky;
     button.pin = pin;
     button.mode = mode;
+    memcpy(button.actions, actions, ACTIONS_LEN*sizeof(typeof(actions[0])));
+    memcpy(button.actions_secondary, actions_secondary, ACTIONS_LEN*sizeof(typeof(actions[0])));
     button.state_primary = false;
     button.virtual_press = false;
     button.press_timestamp = 0;
@@ -122,19 +122,20 @@ Button Button_ (
     button.fsm.long_hold = (mode & LONG) != 0;
 
     // Translation layer from old to new
+    info("loading pin %d\n", pin);
     bool immediate = (mode & IMMEDIATE) != 0;
     bool hold = (mode & HOLD) != 0;
     bool dbl = (mode & DOUBLE) != 0;
     if (mode == NORMAL)
     {
-        for(int i = 0 ; i < 4 ; ++i)
+        for(int i = 0 ; i < ACTIONS_LEN ; ++i)
         {
             addMapping(&button.fsm.press_actions, actions[i], MOD_START, MOD_PRESS);
         }
     }
     else if(hold)
     {
-        for(int i = 0 ; i < 4 ; ++i)
+        for(int i = 0 ; i < ACTIONS_LEN ; ++i)
         {
             addMapping(&button.fsm.press_actions, actions[i], MOD_START, immediate ? MOD_PRESS : MOD_TAP);
             addMapping(&button.fsm.press_actions, actions_secondary[i], MOD_START, MOD_HOLD);
@@ -144,9 +145,9 @@ Button Button_ (
             }
         }
     }
-    else if(dbl /*&& !hold is logically implicit*/)
+    else if(dbl /*&& !hold is logically implied*/)
     {
-        for(int i = 0 ; i < 4 ; ++i)
+        for(int i = 0 ; i < ACTIONS_LEN ; ++i)
         {
             addMapping(&button.fsm.press_actions, actions[i], MOD_START, immediate ? MOD_PRESS : MOD_TAP);
             addMapping(&button.fsm.double_press_actions, actions_secondary[i], MOD_START, MOD_PRESS);

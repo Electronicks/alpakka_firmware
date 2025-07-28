@@ -51,7 +51,7 @@ typedef struct EventAction_Callback_s
     Actions param;
 } EventAction_Callback;
 
-#define MAPPING_SIZE 4 // 5 is too much
+#define MAPPING_SIZE 3 // 5 is too much
 
 // This structure handles the mapping of a button, buy processing and action
 // to be done on tap, hold, turbo and others. It holds a map of actions to perform

@@ -63,7 +63,16 @@ void turboKey(uint8_t key)
 Mapping make_mapping()
 {
     Mapping map;
-    memset(&map, 0, sizeof(Mapping));
+    map.count = 0;
+    for (int i = 0 ; i < MAPPING_SIZE ; ++i)
+    {
+        map.event_mapping[i].event = NoEvent;
+        map.event_mapping[i].func = 0;
+        for(int j = 0 ; j < ACTIONS_LEN ; ++j)
+        {
+            map.event_mapping[i].param[j] = KEY_NONE;
+        }
+    }
     return map;
 }
 
@@ -116,6 +125,7 @@ void processEvent(Mapping *self, ButtonEvent evt)
             EventAction_Callback *cb = &self->event_mapping[evt];
             for(int j = 0 ; j < ACTIONS_LEN ; ++j)
             {
+                info("BTN: Calling action %c for event %d\n", cb->param[j], evt);
                 // Call the event actions
                 cb->func(cb->param[j]);
             }
@@ -126,6 +136,7 @@ void processEvent(Mapping *self, ButtonEvent evt)
 bool addMapping(Mapping *self, uint8_t key, EventModifier evtMod, ActionModifier actMod)
 {
     assert(self);
+    info("Adding %d for %c on %d\n", actMod, key, evtMod);
 
 	EventAction_Callback apply, release;
 	switch (evtMod)
